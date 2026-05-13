@@ -48,10 +48,9 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          # Install ONLY packages that don't conflict
-          # REMOVED: gcc-multilib, g++-multilib, libc6-dev-i386, lib32ncurses5-dev, lib32z1-dev
-          # These conflict with gcc-aarch64-linux-gnu
-          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc             libncurses5-dev x11proto-core-dev             libx11-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget zstd             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          # CRITICAL: Do NOT install gcc-multilib or any 32-bit x86 packages
+          # They conflict with gcc-aarch64-linux-gnu on Ubuntu 22.04
+          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc             libncurses-dev x11proto-core-dev             libx11-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget zstd             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu             llvm clang lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip
 
           # Setup ccache
           echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
@@ -72,64 +71,52 @@ jobs:
           git clone --depth=1 -b ${{ inputs.kernel_branch }}             ${{ env.MODULES_REPO }} mtk_modules
           echo "MODULES_PATH=${{ github.workspace }}/mtk_modules" >> $GITHUB_ENV
 
-      - name: Setup Clang toolchain
+      - name: Setup Clang toolchain (SYSTEM LLVM)
         run: |
-          mkdir -p toolchain
-          cd toolchain
+          # Use system LLVM/Clang from Ubuntu repos (reliable, no downloads)
+          # Ubuntu 22.04 has LLVM 14/15 which is sufficient for kernel 6.1
+          CLANG_BIN=$(dirname $(which clang))
 
-          echo "Downloading Neutron-Clang..."
-          NEUTRON_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/440431/Neutron-18.0.0-x86_64.tar.zst"
-          wget -q --show-progress "$NEUTRON_URL" -O neutron.tar.zst
-
-          mkdir -p neutron-clang
-          tar --zstd -xf neutron.tar.zst -C neutron-clang --strip-components=1
-          rm neutron.tar.zst
-
-          CLANG_BIN="${{ github.workspace }}/toolchain/neutron-clang/bin"
-
-          if [ ! -f "$CLANG_BIN/clang" ]; then
-            echo "::error::Clang not found"
-            exit 1
-          fi
-
+          echo "Using system Clang at: $CLANG_BIN"
           echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
           echo "PATH=$CLANG_BIN:$PATH" >> $GITHUB_ENV
 
           echo "Clang version:"
-          $CLANG_BIN/clang --version
+          clang --version
+          echo "LLVM tools:"
+          which ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip
 
-      - name: Setup GCC toolchain
+      - name: Setup GCC toolchain (SYSTEM CROSS-COMPILER)
         run: |
-          mkdir -p gcc
-          cd gcc
+          # Use system aarch64-linux-gnu-gcc (installed via apt)
+          # Create AOSP-style directory structure for compatibility
+          mkdir -p gcc/aarch64-linux-android-4.9/bin
 
-          echo "Downloading AOSP GCC..."
-          GCC_URL="https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9/archive/refs/heads/lineage-19.1.tar.gz"
-          wget -q --show-progress "$GCC_URL" -O gcc.tar.gz
+          # Find system cross-compiler binaries
+          GCC_BIN=$(which aarch64-linux-gnu-gcc)
+          AR_BIN=$(which aarch64-linux-gnu-ar)
+          LD_BIN=$(which aarch64-linux-gnu-ld)
+          STRIP_BIN=$(which aarch64-linux-gnu-strip)
+          OBJCOPY_BIN=$(which aarch64-linux-gnu-objcopy)
+          OBJDUMP_BIN=$(which aarch64-linux-gnu-objdump)
+          NM_BIN=$(which aarch64-linux-gnu-nm)
 
-          mkdir -p aarch64-linux-android-4.9
-          tar -xzf gcc.tar.gz -C aarch64-linux-android-4.9 --strip-components=1
-          rm gcc.tar.gz
-
-          # Check if binary exists
-          GCC_BIN=$(find ${{ github.workspace }}/gcc -name "aarch64-linux-android-gcc" -type f | head -1)
-
-          if [ -z "$GCC_BIN" ]; then
-            echo "::warning::AOSP GCC not found, using system cross-compiler"
-            mkdir -p aarch64-linux-android-4.9/bin
-            ln -sf $(which aarch64-linux-gnu-gcc) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc
-            ln -sf $(which aarch64-linux-gnu-ar) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ar
-            ln -sf $(which aarch64-linux-gnu-ld) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ld
-            ln -sf $(which aarch64-linux-gnu-strip) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-strip
-            ln -sf $(which aarch64-linux-gnu-objcopy) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objcopy
-            ln -sf $(which aarch64-linux-gnu-objdump) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objdump
-            ln -sf $(which aarch64-linux-gnu-nm) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-nm
-          fi
+          # Create symlinks with AOSP naming
+          ln -sf "$GCC_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc
+          ln -sf "$AR_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ar
+          ln -sf "$LD_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ld
+          ln -sf "$STRIP_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-strip
+          ln -sf "$OBJCOPY_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objcopy
+          ln -sf "$OBJDUMP_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objdump
+          ln -sf "$NM_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-nm
 
           echo "GCC_PATH=${{ github.workspace }}/gcc/aarch64-linux-android-4.9" >> $GITHUB_ENV
 
           echo "GCC binaries:"
-          ls -la ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/
+          ls -la gcc/aarch64-linux-android-4.9/bin/
+
+          # Verify
+          ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc --version
 
       - name: Integrate KernelSU
         if: inputs.with_kernelsu
