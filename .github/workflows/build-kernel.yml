@@ -48,9 +48,24 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          # CRITICAL: Do NOT install gcc-multilib or any 32-bit x86 packages
-          # They conflict with gcc-aarch64-linux-gnu on Ubuntu 22.04
-          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc             libncurses-dev x11proto-core-dev             libx11-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget zstd             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu             llvm clang lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip
+          # CRITICAL FIXES:
+          # 1. Removed gcc-multilib, g++-multilib, libc6-dev-i386, lib32ncurses5-dev, lib32z1-dev
+          #    (they conflict with gcc-aarch64-linux-gnu)
+          # 2. Removed separate llvm-* packages - they don't exist in Ubuntu 22.04
+          #    llvm-ar, llvm-nm, etc. are provided by the 'llvm' package as binaries
+          # 3. Using ONLY packages that actually exist in Ubuntu 22.04 repos
+          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc             libncurses-dev x11proto-core-dev             libx11-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget zstd             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu             clang lld llvm
+
+          # Verify tools exist
+          echo "=== Verifying installed tools ==="
+          which clang && clang --version | head -1
+          which ld.lld && ld.lld --version | head -1
+          which aarch64-linux-gnu-gcc && aarch64-linux-gnu-gcc --version | head -1
+          which llvm-ar && llvm-ar --version | head -1
+          which llvm-nm && llvm-nm --version | head -1
+          which llvm-objcopy && llvm-objcopy --version | head -1
+          which llvm-objdump && llvm-objdump --version | head -1
+          which llvm-strip && llvm-strip --version | head -1
 
           # Setup ccache
           echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
@@ -71,52 +86,32 @@ jobs:
           git clone --depth=1 -b ${{ inputs.kernel_branch }}             ${{ env.MODULES_REPO }} mtk_modules
           echo "MODULES_PATH=${{ github.workspace }}/mtk_modules" >> $GITHUB_ENV
 
-      - name: Setup Clang toolchain (SYSTEM LLVM)
+      - name: Setup Clang toolchain (SYSTEM)
         run: |
-          # Use system LLVM/Clang from Ubuntu repos (reliable, no downloads)
-          # Ubuntu 22.04 has LLVM 14/15 which is sufficient for kernel 6.1
+          # Use system clang/llvm from Ubuntu repos (already installed)
           CLANG_BIN=$(dirname $(which clang))
-
-          echo "Using system Clang at: $CLANG_BIN"
           echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
           echo "PATH=$CLANG_BIN:$PATH" >> $GITHUB_ENV
+          echo "Using system Clang:"
+          clang --version | head -1
 
-          echo "Clang version:"
-          clang --version
-          echo "LLVM tools:"
-          which ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip
-
-      - name: Setup GCC toolchain (SYSTEM CROSS-COMPILER)
+      - name: Setup GCC toolchain (SYSTEM)
         run: |
-          # Use system aarch64-linux-gnu-gcc (installed via apt)
-          # Create AOSP-style directory structure for compatibility
+          # Use system aarch64-linux-gnu-gcc (already installed)
+          # Create AOSP-style directory structure with symlinks
           mkdir -p gcc/aarch64-linux-android-4.9/bin
 
-          # Find system cross-compiler binaries
-          GCC_BIN=$(which aarch64-linux-gnu-gcc)
-          AR_BIN=$(which aarch64-linux-gnu-ar)
-          LD_BIN=$(which aarch64-linux-gnu-ld)
-          STRIP_BIN=$(which aarch64-linux-gnu-strip)
-          OBJCOPY_BIN=$(which aarch64-linux-gnu-objcopy)
-          OBJDUMP_BIN=$(which aarch64-linux-gnu-objdump)
-          NM_BIN=$(which aarch64-linux-gnu-nm)
-
-          # Create symlinks with AOSP naming
-          ln -sf "$GCC_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc
-          ln -sf "$AR_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ar
-          ln -sf "$LD_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ld
-          ln -sf "$STRIP_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-strip
-          ln -sf "$OBJCOPY_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objcopy
-          ln -sf "$OBJDUMP_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objdump
-          ln -sf "$NM_BIN" gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-nm
+          ln -sf $(which aarch64-linux-gnu-gcc) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc
+          ln -sf $(which aarch64-linux-gnu-ar) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ar
+          ln -sf $(which aarch64-linux-gnu-ld) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ld
+          ln -sf $(which aarch64-linux-gnu-strip) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-strip
+          ln -sf $(which aarch64-linux-gnu-objcopy) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objcopy
+          ln -sf $(which aarch64-linux-gnu-objdump) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objdump
+          ln -sf $(which aarch64-linux-gnu-nm) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-nm
 
           echo "GCC_PATH=${{ github.workspace }}/gcc/aarch64-linux-android-4.9" >> $GITHUB_ENV
-
-          echo "GCC binaries:"
+          echo "GCC setup complete:"
           ls -la gcc/aarch64-linux-android-4.9/bin/
-
-          # Verify
-          ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc --version
 
       - name: Integrate KernelSU
         if: inputs.with_kernelsu
@@ -311,4 +306,4 @@ jobs:
           echo "Output: ${{ env.ZIP_NAME }}"
           echo "=========================================="
           ccache -s
-          
+
