@@ -31,9 +31,6 @@ env:
   KERNEL_REPO: https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git
   MODULES_REPO: https://github.com/MiCode/MTK_kernel_modules.git
   ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3.git
-  CLANG_REPO: https://github.com/llvm/llvm-project.git
-  CLANG_BRANCH: release/17.x
-  CLANG_VERSION: 17
 
 jobs:
   build-kernel:
@@ -62,7 +59,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386             libncurses5 lib32ncurses5-dev x11proto-core-dev             libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler
+          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386             libncurses5 lib32ncurses5-dev x11proto-core-dev             libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget
 
           # Setup ccache
           echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
@@ -111,21 +108,46 @@ jobs:
           echo "MODULES_PATH=${{ github.workspace }}/mtk_modules" >> $GITHUB_ENV
 
       # ============================================
-      # Step 6: Setup Clang toolchain
+      # Step 6: Setup Clang toolchain (FIXED)
       # ============================================
       - name: Setup Clang toolchain
         run: |
-          # Download prebuilt AOSP Clang
           mkdir -p toolchain
           cd toolchain
 
-          # Use AOSP Clang r487747c (Android 14/15 compatible)
-          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz"
-          wget -q --show-progress "$CLANG_URL" -O clang.tar.gz
-          tar -xzf clang.tar.gz
-          rm clang.tar.gz
+          # Download AOSP Clang r487747c from Android 14/15 prebuilts
+          # Using a known working mirror/archive
+          CLANG_URL="https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r487747c/archive/refs/heads/lineage-22.1.tar.gz"
+
+          echo "Downloading Clang from: $CLANG_URL"
+          wget -q --show-progress "$CLANG_URL" -O clang.tar.gz || {
+            echo "Primary URL failed, trying alternative..."
+            # Alternative: Neutron-Clang (prebuilt, reliable)
+            wget -q --show-progress "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/440431/Neutron-18.0.0-x86_64.tar.zst" -O neutron.tar.zst
+            sudo apt-get install -y zstd
+            tar --zstd -xf neutron.tar.zst
+            mv neutron* clang-r487747c
+            rm neutron.tar.zst
+          }
+
+          if [ -f clang.tar.gz ]; then
+            tar -xzf clang.tar.gz
+            # Find the extracted directory
+            EXTRACTED_DIR=$(find . -maxdepth 1 -type d | grep -v '^\.$' | head -1)
+            mv "$EXTRACTED_DIR" clang-r487747c
+            rm clang.tar.gz
+          fi
 
           CLANG_BIN="${{ github.workspace }}/toolchain/clang-r487747c/bin"
+
+          # Verify clang exists
+          if [ ! -f "$CLANG_BIN/clang" ]; then
+            echo "::error::Clang binary not found at $CLANG_BIN/clang"
+            ls -la "${{ github.workspace }}/toolchain/"
+            find "${{ github.workspace }}/toolchain/" -name "clang" -type f
+            exit 1
+          fi
+
           echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
           echo "PATH=$CLANG_BIN:$PATH" >> $GITHUB_ENV
 
@@ -140,13 +162,19 @@ jobs:
           mkdir -p gcc
           cd gcc
 
-          # AOSP GCC 4.9 for aarch64
-          GCC_URL="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
-          wget -q --show-progress "$GCC_URL" -O gcc.tar.gz
+          # AOSP GCC 4.9 for aarch64 from GitHub mirror
+          GCC_URL="https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9/archive/refs/heads/lineage-19.1.tar.gz"
+          wget -q --show-progress "$GCC_URL" -O gcc.tar.gz || {
+            echo "Primary GCC URL failed, trying alternative..."
+            wget -q --show-progress "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" -O gcc.tar.gz
+          }
+
           tar -xzf gcc.tar.gz
+          EXTRACTED_DIR=$(find . -maxdepth 1 -type d | grep -v '^\.$' | head -1)
+          mv "$EXTRACTED_DIR" aarch64-linux-android-4.9
           rm gcc.tar.gz
 
-          echo "GCC_PATH=${{ github.workspace }}/gcc" >> $GITHUB_ENV
+          echo "GCC_PATH=${{ github.workspace }}/gcc/aarch64-linux-android-4.9" >> $GITHUB_ENV
 
       # ============================================
       # Step 8: Integrate KernelSU (optional)
