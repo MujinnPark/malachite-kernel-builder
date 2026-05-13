@@ -34,9 +34,6 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      # ============================================
-      # Step 1: Free up disk space
-      # ============================================
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
@@ -48,13 +45,13 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      # ============================================
-      # Step 2: Install dependencies
-      # ============================================
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386             libncurses5 lib32ncurses5-dev x11proto-core-dev             libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget zstd             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          # Install ONLY packages that don't conflict
+          # REMOVED: gcc-multilib, g++-multilib, libc6-dev-i386, lib32ncurses5-dev, lib32z1-dev
+          # These conflict with gcc-aarch64-linux-gnu
+          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc             libncurses5-dev x11proto-core-dev             libx11-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget zstd             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
           # Setup ccache
           echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
@@ -62,9 +59,6 @@ jobs:
           ccache -M 5G
           ccache -s
 
-      # ============================================
-      # Step 3: Clone kernel source
-      # ============================================
       - name: Clone Xiaomi kernel source
         run: |
           git clone --depth=1 -b ${{ inputs.kernel_branch }}             ${{ env.KERNEL_REPO }} kernel
@@ -73,23 +67,16 @@ jobs:
           echo "Current kernel version:"
           make kernelversion
 
-      # ============================================
-      # Step 4: Clone MTK kernel modules
-      # ============================================
       - name: Clone MTK kernel modules
         run: |
           git clone --depth=1 -b ${{ inputs.kernel_branch }}             ${{ env.MODULES_REPO }} mtk_modules
           echo "MODULES_PATH=${{ github.workspace }}/mtk_modules" >> $GITHUB_ENV
 
-      # ============================================
-      # Step 5: Setup Clang toolchain
-      # ============================================
       - name: Setup Clang toolchain
         run: |
           mkdir -p toolchain
           cd toolchain
 
-          # Method 1: Try Neutron-Clang (most reliable)
           echo "Downloading Neutron-Clang..."
           NEUTRON_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/440431/Neutron-18.0.0-x86_64.tar.zst"
           wget -q --show-progress "$NEUTRON_URL" -O neutron.tar.zst
@@ -100,11 +87,8 @@ jobs:
 
           CLANG_BIN="${{ github.workspace }}/toolchain/neutron-clang/bin"
 
-          # Verify clang exists
           if [ ! -f "$CLANG_BIN/clang" ]; then
-            echo "::error::Clang not found at $CLANG_BIN/clang"
-            find ${{ github.workspace }}/toolchain -name "clang" -type f 2>/dev/null || true
-            ls -la ${{ github.workspace }}/toolchain/neutron-clang/ || true
+            echo "::error::Clang not found"
             exit 1
           fi
 
@@ -113,18 +97,12 @@ jobs:
 
           echo "Clang version:"
           $CLANG_BIN/clang --version
-          echo "LLVM tools check:"
-          ls -la $CLANG_BIN/ld.lld $CLANG_BIN/llvm-ar $CLANG_BIN/llvm-strip 2>/dev/null || true
 
-      # ============================================
-      # Step 6: Setup GCC toolchain (FIXED)
-      # ============================================
       - name: Setup GCC toolchain
         run: |
           mkdir -p gcc
           cd gcc
 
-          # Download AOSP GCC 4.9 from GitHub mirror
           echo "Downloading AOSP GCC..."
           GCC_URL="https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9/archive/refs/heads/lineage-19.1.tar.gz"
           wget -q --show-progress "$GCC_URL" -O gcc.tar.gz
@@ -133,17 +111,11 @@ jobs:
           tar -xzf gcc.tar.gz -C aarch64-linux-android-4.9 --strip-components=1
           rm gcc.tar.gz
 
-          # DEBUG: Show directory structure
-          echo "GCC directory structure:"
-          find ${{ github.workspace }}/gcc -maxdepth 3 -type d | head -20
-          echo "GCC binaries:"
-          find ${{ github.workspace }}/gcc -name "aarch64-linux-android-*" -type f | head -20
+          # Check if binary exists
+          GCC_BIN=$(find ${{ github.workspace }}/gcc -name "aarch64-linux-android-gcc" -type f | head -1)
 
-          # Find the actual binary path
-          GCC_BIN_PATH=$(find ${{ github.workspace }}/gcc -name "aarch64-linux-android-gcc" -type f | head -1)
-          if [ -z "$GCC_BIN_PATH" ]; then
-            echo "::warning::AOSP GCC binary not found, using system cross-compiler"
-            # Create symlink structure for system compiler
+          if [ -z "$GCC_BIN" ]; then
+            echo "::warning::AOSP GCC not found, using system cross-compiler"
             mkdir -p aarch64-linux-android-4.9/bin
             ln -sf $(which aarch64-linux-gnu-gcc) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc
             ln -sf $(which aarch64-linux-gnu-ar) ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ar
@@ -156,27 +128,19 @@ jobs:
 
           echo "GCC_PATH=${{ github.workspace }}/gcc/aarch64-linux-android-4.9" >> $GITHUB_ENV
 
-          # Final verification
-          echo "Final GCC binaries:"
-          ls -la ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/ | head -20
+          echo "GCC binaries:"
+          ls -la ${{ github.workspace }}/gcc/aarch64-linux-android-4.9/bin/
 
-      # ============================================
-      # Step 7: Integrate KernelSU (optional)
-      # ============================================
       - name: Integrate KernelSU
         if: inputs.with_kernelsu
         run: |
           cd kernel
           git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU
-          cd KernelSU/kernel
           cd ${{ github.workspace }}/kernel
           bash -c "$(curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh)"
           echo "KERNELSU_ENABLED=true" >> $GITHUB_ENV
           echo "::notice::KernelSU integrated successfully"
 
-      # ============================================
-      # Step 8: Configure kernel build
-      # ============================================
       - name: Configure kernel
         run: |
           cd kernel
@@ -186,10 +150,8 @@ jobs:
           export CXX="${{ env.CLANG_BIN }}/clang++"
           export CROSS_COMPILE="${{ env.GCC_PATH }}/bin/aarch64-linux-android-"
 
-          # Generate defconfig
           make O=out ARCH=arm64 gki_defconfig
 
-          # Enable additional configs for Malachite
           cat >> out/.config << 'EOF'
           CONFIG_MTK_PLATFORM="mt6878"
           CONFIG_ARCH_MEDIATEK=y
@@ -206,14 +168,10 @@ jobs:
           CONFIG_LOCALVERSION="-Malachite-Custom"
           EOF
 
-          # Update config
           make O=out ARCH=arm64 olddefconfig
 
           echo "::notice::Kernel configuration complete"
 
-      # ============================================
-      # Step 9: Build kernel
-      # ============================================
       - name: Build kernel
         run: |
           cd kernel
@@ -229,14 +187,11 @@ jobs:
           export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
           export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
 
-          # Build with ccache
           export CCACHE_COMPRESS=1
           export CCACHE_DIR="${{ github.workspace }}/.ccache"
 
-          # Start build
           make -j$(nproc) O=out ARCH=arm64             CC="ccache $CC"             CXX="$CXX"             CROSS_COMPILE="$CROSS_COMPILE"             LD="$LD" AR="$AR" NM="$NM"             OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP"             2>&1 | tee build.log
 
-          # Check build result
           if [ ! -f out/arch/arm64/boot/Image.gz ]; then
             echo "::error::Kernel build failed!"
             tail -n 100 build.log
@@ -246,9 +201,6 @@ jobs:
           echo "::notice::Kernel build successful!"
           ls -lh out/arch/arm64/boot/
 
-      # ============================================
-      # Step 10: Build MTK kernel modules
-      # ============================================
       - name: Build MTK modules
         run: |
           cd mtk_modules
@@ -264,9 +216,6 @@ jobs:
 
           echo "::notice::MTK modules build complete"
 
-      # ============================================
-      # Step 11: Package with AnyKernel3
-      # ============================================
       - name: Package with AnyKernel3
         run: |
           git clone --depth=1 ${{ env.ANYKERNEL_REPO }} anykernel
@@ -324,9 +273,6 @@ jobs:
 
           echo "::notice::Package created: $ZIP_NAME"
 
-      # ============================================
-      # Step 12: Upload artifacts
-      # ============================================
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -338,9 +284,6 @@ jobs:
             ${{ env.ZIP_PATH }}
           if-no-files-found: warn
 
-      # ============================================
-      # Step 13: Create GitHub Release
-      # ============================================
       - name: Create Release
         if: inputs.release
         uses: ncipollo/release-action@v1
@@ -370,9 +313,6 @@ jobs:
           draft: false
           prerelease: true
 
-      # ============================================
-      # Step 14: Show build summary
-      # ============================================
       - name: Build summary
         run: |
           echo "=========================================="
