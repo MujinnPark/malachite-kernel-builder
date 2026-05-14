@@ -124,7 +124,6 @@ jobs:
           make O=out ARCH=arm64 gki_defconfig
 
           # CRITICAL FIX: Disable stack protector properly
-          # Method 1: In kernel config
           cat >> out/.config << 'EOF'
           CONFIG_MTK_PLATFORM="mt6878"
           CONFIG_ARCH_MEDIATEK=y
@@ -167,9 +166,8 @@ jobs:
           export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
           export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
 
-          # CRITICAL FIX: Override compiler flags to disable stack protection
+          # CRITICAL FIX: Explicitly disable stack protection in compiler flags
           # Ubuntu's GCC enables -fstack-protector-strong by default
-          # We need to explicitly disable it for kernel modules
           export CFLAGS="-fno-stack-protector"
           export KBUILD_CFLAGS="-fno-stack-protector"
 
@@ -311,5 +309,4 @@ jobs:
           echo "Output: ${{ env.ZIP_NAME }}"
           echo "=========================================="
           ccache -s
-
-
+          
