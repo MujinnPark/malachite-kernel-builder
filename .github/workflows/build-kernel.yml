@@ -123,8 +123,8 @@ jobs:
 
           make O=out ARCH=arm64 gki_defconfig
 
-          # CRITICAL FIX: Disable stack protector to avoid __stack_chk_guard errors
-          # System GCC has stack protection enabled by default which conflicts with kernel build
+          # CRITICAL FIX: Disable stack protector properly
+          # Method 1: In kernel config
           cat >> out/.config << 'EOF'
           CONFIG_MTK_PLATFORM="mt6878"
           CONFIG_ARCH_MEDIATEK=y
@@ -139,7 +139,7 @@ jobs:
           CONFIG_MTK_CONN_LTE_IDC_SUPPORT=y
           CONFIG_MTK_COMBO_CHIP_MT6631=y
           CONFIG_LOCALVERSION="-Malachite-Custom"
-          # Disable stack protector to fix __stack_chk_guard errors
+          # Disable stack protector completely
           CONFIG_CC_STACKPROTECTOR_NONE=y
           # CONFIG_CC_STACKPROTECTOR is not set
           # CONFIG_CC_STACKPROTECTOR_STRONG is not set
@@ -149,7 +149,7 @@ jobs:
           make O=out ARCH=arm64 olddefconfig
 
           echo "::notice::Kernel configuration complete"
-          echo "Stack protector setting:"
+          echo "Stack protector settings:"
           grep -E "STACKPROTECTOR" out/.config || true
 
       - name: Build kernel
@@ -167,13 +167,17 @@ jobs:
           export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
           export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
 
-          # Additional fix: Disable stack protection flags for GCC
-          export KBUILD_CFLAGS=""
+          # CRITICAL FIX: Override compiler flags to disable stack protection
+          # Ubuntu's GCC enables -fstack-protector-strong by default
+          # We need to explicitly disable it for kernel modules
+          export CFLAGS="-fno-stack-protector"
+          export KBUILD_CFLAGS="-fno-stack-protector"
 
           export CCACHE_COMPRESS=1
           export CCACHE_DIR="${{ github.workspace }}/.ccache"
 
-          make -j$(nproc) O=out ARCH=arm64             CC="ccache $CC"             CXX="$CXX"             CROSS_COMPILE="$CROSS_COMPILE"             LD="$LD" AR="$AR" NM="$NM"             OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP"             KBUILD_CFLAGS=""             2>&1 | tee build.log
+          # Build with explicit stack protector disable
+          make -j$(nproc) O=out ARCH=arm64             CC="ccache $CC"             CXX="$CXX"             CROSS_COMPILE="$CROSS_COMPILE"             LD="$LD" AR="$AR" NM="$NM"             OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP"             CFLAGS="$CFLAGS"             KBUILD_CFLAGS="$KBUILD_CFLAGS"             2>&1 | tee build.log
 
           if [ ! -f out/arch/arm64/boot/Image.gz ]; then
             echo "::error::Kernel build failed!"
@@ -307,4 +311,5 @@ jobs:
           echo "Output: ${{ env.ZIP_NAME }}"
           echo "=========================================="
           ccache -s
+
 
