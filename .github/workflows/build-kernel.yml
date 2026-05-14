@@ -3,11 +3,6 @@ name: Malachite Kernel Build
 on:
   workflow_dispatch:
     inputs:
-      kernel_branch:
-        description: 'Kernel source branch'
-        required: true
-        default: 'malachite-u-oss'
-        type: string
       with_kernelsu:
         description: 'Integrate KernelSU'
         required: true
@@ -19,14 +14,6 @@ on:
         default: true
         type: boolean
 
-env:
-  ARCH: arm64
-  SUBARCH: arm64
-  DEVICE: malachite
-  KERNEL_REPO: https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git
-  MODULES_REPO: https://github.com/MiCode/MTK_kernel_modules.git
-  ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3.git
-
 jobs:
   build-kernel:
     name: Build Malachite Kernel
@@ -34,279 +21,32 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+      - name: Build Kernel
+        uses: dabao1955/kernel_build_action@main
         with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 4096
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
+          kernel-url: https://github.com/MiCode/Xiaomi_Kernel_OpenSource
+          kernel-branch: malachite-u-oss
+          config: gki_defconfig
+          arch: arm64
+          aosp-clang: true
+          aosp-gcc: true
+          android-version: 14
+          aosp-clang-version: r487747c
+          anykernel3: true
+          release: ${{ inputs.release }}
+          access-token: ${{ secrets.GITHUB_TOKEN }}
+          extra-cmd: |
+            export CONFIG_MTK_PLATFORM="mt6878"
+            export CONFIG_ARCH_MEDIATEK=y
+            export CONFIG_MTK_CPU_SUSPEND_EN=y
+            export CONFIG_MTK_IRQ_NEW_DESIGN=y
+            export CONFIG_MTK_PSCI=y
+            export CONFIG_MTK_SCHED_RQ_AVG_KS=y
+            export CONFIG_MTK_FREQ_HOPPING=y
+            export CONFIG_MTK_GPU_SUPPORT=y
+            export CONFIG_MALI_BIFROST=y
+            export CONFIG_MALI_MIDGARD=y
+            export CONFIG_MTK_CONN_LTE_IDC_SUPPORT=y
+            export CONFIG_MTK_COMBO_CHIP_MT6631=y
+            export CONFIG_LOCALVERSION="-Malachite-Custom"
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y             git-core gnupg flex bison build-essential zip curl             zlib1g-dev gcc             libncurses-dev x11proto-core-dev             libx11-dev libgl1-mesa-dev libxml2-utils             xsltproc unzip fontconfig python3 python3-pip bc             ccache libssl-dev ninja-build cmake cpio kmod             libelf-dev device-tree-compiler wget zstd             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu             clang lld llvm
-
-          echo "=== Verifying installed tools ==="
-          which clang && clang --version | head -1
-          which ld.lld && ld.lld --version | head -1
-          which aarch64-linux-gnu-gcc && aarch64-linux-gnu-gcc --version | head -1
-          which llvm-ar && llvm-ar --version | head -1
-          which llvm-nm && llvm-nm --version | head -1
-          which llvm-objcopy && llvm-objcopy --version | head -1
-          which llvm-objdump && llvm-objdump --version | head -1
-          which llvm-strip && llvm-strip --version | head -1
-
-          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=5G" >> $GITHUB_ENV
-          ccache -M 5G
-          ccache -s
-
-      - name: Clone Xiaomi kernel source
-        run: |
-          git clone --depth=1 -b ${{ inputs.kernel_branch }}             ${{ env.KERNEL_REPO }} kernel
-          cd kernel
-          echo "KERNEL_PATH=${{ github.workspace }}/kernel" >> $GITHUB_ENV
-          echo "Current kernel version:"
-          make kernelversion
-
-      - name: Clone MTK kernel modules
-        run: |
-          git clone --depth=1 -b ${{ inputs.kernel_branch }}             ${{ env.MODULES_REPO }} mtk_modules
-          echo "MODULES_PATH=${{ github.workspace }}/mtk_modules" >> $GITHUB_ENV
-
-      - name: Setup Clang toolchain (SYSTEM)
-        run: |
-          CLANG_BIN=$(dirname $(which clang))
-          echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
-          echo "PATH=$CLANG_BIN:$PATH" >> $GITHUB_ENV
-          echo "Using system Clang:"
-          clang --version | head -1
-
-      - name: Setup GCC toolchain (SYSTEM)
-        run: |
-          mkdir -p gcc/aarch64-linux-android-4.9/bin
-
-          ln -sf $(which aarch64-linux-gnu-gcc) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc
-          ln -sf $(which aarch64-linux-gnu-ar) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ar
-          ln -sf $(which aarch64-linux-gnu-ld) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-ld
-          ln -sf $(which aarch64-linux-gnu-strip) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-strip
-          ln -sf $(which aarch64-linux-gnu-objcopy) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objcopy
-          ln -sf $(which aarch64-linux-gnu-objdump) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-objdump
-          ln -sf $(which aarch64-linux-gnu-nm) gcc/aarch64-linux-android-4.9/bin/aarch64-linux-android-nm
-
-          echo "GCC_PATH=${{ github.workspace }}/gcc/aarch64-linux-android-4.9" >> $GITHUB_ENV
-          echo "GCC setup complete:"
-          ls -la gcc/aarch64-linux-android-4.9/bin/
-
-      - name: Integrate KernelSU
-        if: inputs.with_kernelsu
-        run: |
-          cd kernel
-          git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU
-          cd ${{ github.workspace }}/kernel
-          bash -c "$(curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh)"
-          echo "KERNELSU_ENABLED=true" >> $GITHUB_ENV
-          echo "::notice::KernelSU integrated successfully"
-
-      - name: Configure kernel
-        run: |
-          cd kernel
-
-          export PATH="${{ env.CLANG_BIN }}:${{ env.GCC_PATH }}/bin:$PATH"
-          export CC="${{ env.CLANG_BIN }}/clang"
-          export CXX="${{ env.CLANG_BIN }}/clang++"
-          export CROSS_COMPILE="${{ env.GCC_PATH }}/bin/aarch64-linux-android-"
-
-          make O=out ARCH=arm64 gki_defconfig
-
-          # CRITICAL FIX: Disable stack protector properly
-          cat >> out/.config << 'EOF'
-          CONFIG_MTK_PLATFORM="mt6878"
-          CONFIG_ARCH_MEDIATEK=y
-          CONFIG_MTK_CPU_SUSPEND_EN=y
-          CONFIG_MTK_IRQ_NEW_DESIGN=y
-          CONFIG_MTK_PSCI=y
-          CONFIG_MTK_SCHED_RQ_AVG_KS=y
-          CONFIG_MTK_FREQ_HOPPING=y
-          CONFIG_MTK_GPU_SUPPORT=y
-          CONFIG_MALI_BIFROST=y
-          CONFIG_MALI_MIDGARD=y
-          CONFIG_MTK_CONN_LTE_IDC_SUPPORT=y
-          CONFIG_MTK_COMBO_CHIP_MT6631=y
-          CONFIG_LOCALVERSION="-Malachite-Custom"
-          # Disable stack protector completely
-          CONFIG_CC_STACKPROTECTOR_NONE=y
-          # CONFIG_CC_STACKPROTECTOR is not set
-          # CONFIG_CC_STACKPROTECTOR_STRONG is not set
-          # CONFIG_CC_STACKPROTECTOR_AUTO is not set
-          EOF
-
-          make O=out ARCH=arm64 olddefconfig
-
-          echo "::notice::Kernel configuration complete"
-          echo "Stack protector settings:"
-          grep -E "STACKPROTECTOR" out/.config || true
-
-      - name: Build kernel
-        run: |
-          cd kernel
-
-          export PATH="${{ env.CLANG_BIN }}:${{ env.GCC_PATH }}/bin:$PATH"
-          export CC="${{ env.CLANG_BIN }}/clang"
-          export CXX="${{ env.CLANG_BIN }}/clang++"
-          export CROSS_COMPILE="${{ env.GCC_PATH }}/bin/aarch64-linux-android-"
-          export LD="${{ env.CLANG_BIN }}/ld.lld"
-          export AR="${{ env.CLANG_BIN }}/llvm-ar"
-          export NM="${{ env.CLANG_BIN }}/llvm-nm"
-          export OBJCOPY="${{ env.CLANG_BIN }}/llvm-objcopy"
-          export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
-          export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
-
-          # CRITICAL FIX: Explicitly disable stack protection in compiler flags
-          # Ubuntu's GCC enables -fstack-protector-strong by default
-          export CFLAGS="-fno-stack-protector"
-          export KBUILD_CFLAGS="-fno-stack-protector"
-
-          export CCACHE_COMPRESS=1
-          export CCACHE_DIR="${{ github.workspace }}/.ccache"
-
-          # Build with explicit stack protector disable
-          make -j$(nproc) O=out ARCH=arm64             CC="ccache $CC"             CXX="$CXX"             CROSS_COMPILE="$CROSS_COMPILE"             LD="$LD" AR="$AR" NM="$NM"             OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP"             CFLAGS="$CFLAGS"             KBUILD_CFLAGS="$KBUILD_CFLAGS"             2>&1 | tee build.log
-
-          if [ ! -f out/arch/arm64/boot/Image.gz ]; then
-            echo "::error::Kernel build failed!"
-            tail -n 100 build.log
-            exit 1
-          fi
-
-          echo "::notice::Kernel build successful!"
-          ls -lh out/arch/arm64/boot/
-
-      - name: Build MTK modules
-        run: |
-          cd mtk_modules
-
-          export KERNEL_SRC="${{ github.workspace }}/kernel"
-          export PATH="${{ env.CLANG_BIN }}:${{ env.GCC_PATH }}/bin:$PATH"
-          export CC="${{ env.CLANG_BIN }}/clang"
-          export CROSS_COMPILE="${{ env.GCC_PATH }}/bin/aarch64-linux-android-"
-
-          make -j$(nproc)             KERNEL_SRC="$KERNEL_SRC"             CC="$CC"             CROSS_COMPILE="$CROSS_COMPILE"             2>&1 | tee modules_build.log || {
-              echo "::warning::MTK modules build had issues, continuing..."
-            }
-
-          echo "::notice::MTK modules build complete"
-
-      - name: Package with AnyKernel3
-        run: |
-          git clone --depth=1 ${{ env.ANYKERNEL_REPO }} anykernel
-          cd anykernel
-
-          cp ${{ github.workspace }}/kernel/out/arch/arm64/boot/Image.gz .
-
-          if [ -f ${{ github.workspace }}/kernel/out/arch/arm64/boot/dts/mediatek/mt6878.dtb ]; then
-            cp ${{ github.workspace }}/kernel/out/arch/arm64/boot/dts/mediatek/mt6878.dtb .
-          fi
-
-          if [ -f ${{ github.workspace }}/kernel/out/arch/arm64/boot/dtbo.img ]; then
-            cp ${{ github.workspace }}/kernel/out/arch/arm64/boot/dtbo.img .
-          fi
-
-          mkdir -p modules
-          find ${{ github.workspace }}/mtk_modules -name "*.ko" -exec cp {} modules/ \; 2>/dev/null || true
-          find ${{ github.workspace }}/kernel/out -name "*.ko" -exec cp {} modules/ \; 2>/dev/null || true
-
-          cat > anykernel.sh << 'EOF'
-          # AnyKernel3 Ramdisk Mod Script
-          # osm0sis @ xda-developers
-
-          ## AnyKernel setup
-          # begin properties
-          properties() {           kernel.string=Malachite Custom Kernel by GitHub Actions;           do.devicecheck=1;           do.modules=1;           do.systemless=1;           do.cleanup=1;           do.cleanuponabort=0;           device.name1=malachite;           device.name2=POCOX7;           device.name3=redmi_note_14_pro;           supported.versions=14 15;           supported.patchlevels=;           ;           }
-          # end properties
-
-          # shell variables
-          block=/dev/block/bootdevice/by-name/boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-
-          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
-          . tools/ak3-core.sh;
-
-          # boot install
-          dump_boot;
-
-          write_boot;
-          ## end boot install
-          EOF
-
-          ZIP_NAME="Malachite-Kernel-$(date +%Y%m%d)-$(git -C ${{ github.workspace }}/kernel rev-parse --short HEAD)"
-          if [ "${{ inputs.with_kernelsu }}" = "true" ]; then
-            ZIP_NAME="${ZIP_NAME}-KernelSU"
-          fi
-          ZIP_NAME="${ZIP_NAME}.zip"
-
-          zip -r9 "$ZIP_NAME" * -x .git README.md
-
-          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-          echo "ZIP_PATH=${{ github.workspace }}/anykernel/$ZIP_NAME" >> $GITHUB_ENV
-
-          echo "::notice::Package created: $ZIP_NAME"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-build-artifacts
-          path: |
-            ${{ github.workspace }}/kernel/out/arch/arm64/boot/Image.gz
-            ${{ github.workspace }}/kernel/out/arch/arm64/boot/Image
-            ${{ github.workspace }}/kernel/build.log
-            ${{ env.ZIP_PATH }}
-          if-no-files-found: warn
-
-      - name: Create Release
-        if: inputs.release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "${{ env.ZIP_PATH }}"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag: "malachite-${{ github.run_number }}"
-          name: "Malachite Kernel Build #${{ github.run_number }}"
-          body: |
-            ## Malachite Custom Kernel Build
-
-            **Device:** POCO X7 5G / Redmi Note 14 Pro 5G (malachite)
-            **SoC:** MediaTek Dimensity 7300-Ultra (MT6878)
-            **KernelSU:** ${{ inputs.with_kernelsu && 'Enabled' || 'Disabled' }}
-            **Build Date:** $(date -u +%Y-%m-%d %H:%M UTC)
-            **Commit:** $(git -C ${{ github.workspace }}/kernel rev-parse --short HEAD)
-
-            ### Installation
-            1. Backup your current boot.img
-            2. Flash via TWRP/OrangeFox or fastboot
-            3. Wipe cache/dalvik
-
-            ### Notes
-            - GKI (Generic Kernel Image) device
-            - Requires compatible vendor modules
-            - Use at your own risk
-          draft: false
-          prerelease: true
-
-      - name: Build summary
-        run: |
-          echo "=========================================="
-          echo "  Malachite Kernel Build Complete"
-          echo "=========================================="
-          echo "Kernel Version: $(cd kernel && make kernelversion)"
-          echo "Build Date: $(date)"
-          echo "KernelSU: ${{ inputs.with_kernelsu }}"
-          echo "Output: ${{ env.ZIP_NAME }}"
-          echo "=========================================="
-          ccache -s
-          
